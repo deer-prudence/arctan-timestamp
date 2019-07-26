@@ -1,10 +1,9 @@
-
 # CONTROL
-# the control uses the baseline cosine similarity (cosine_sim = 1 - spatial.distance.cosine(user1_list, user2_list))
-# it adds timestamp weighting to measure the increase/decrease in prediction accuracy
+# the control code can be used as a jumping off point for students. It uses cosine similarity. 
 
 # ARCTAN
-# needs to be added
+# this is an example of how a student could try to modify a collaborative recommender system in order
+# to solve the issue of variation in user similarity depending on when users rated items
 
 # DATASET
 # https://www.kaggle.com/rounakbanik/the-movies-dataset
