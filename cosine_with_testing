@@ -3,10 +3,9 @@ import numpy as np
 import random
 import re
 import pprint
+import scipy
     #pp = pprint.PrettyPrinter(indent=4)
     #pp.pprint(df2['overview'])
-import scipy
-import timeit
 from surprise import Reader, Dataset, SVD, evaluate
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
@@ -15,6 +14,15 @@ from sklearn.metrics import mean_absolute_error
 from math import sqrt
 from scipy.spatial.distance import pdist,squareform
 from scipy import spatial
+# take first element for sort
+
+def take_first(element):
+    return element[0]
+
+# take second element for sort
+def take_second(element):
+    if element[1] >= 4.0: # must have a similarity score of 4.0 or similar
+        return element[1]
 
 # this should find the three most similar users and order them from most similar to third most similar
 def order_list(list_to_order, index_function, desired_elements):
@@ -38,22 +46,24 @@ def order_list(list_to_order, index_function, desired_elements):
 def random_users(num_users, total_users):
     random_users = list()
     while len(random_users) < num_users:
-        random_user = random.randint(1, total_users)
+        random_user = random.randint(0, total_users)
         if random_user not in random_users:
             random_users.append(random_user)
     return random_users
 
-def basic_cosine_timestamp_weight(user1_data, user2_data, all_movies):
+def scale_score(list):
+    score = list[1] * 5
+    return [list[0], score]
+
+def cosine_weight(user1_data, user2_data, all_movies):
     similarity_matrix = [[None for x in range(len(all_movies))] for y in range(len(all_movies))]
     user1_list = [0 for x in range(len(all_movies))]
     user2_list = [0 for x in range(len(all_movies))]
     
     movie1 = list(user1_data['movieId'])
     rating1 = list(user1_data['rating'])
-    timestamp1 = list(user1_data['timestamp'])
     movie2 = list(user2_data['movieId'])
     rating2 = list(user2_data['rating'])
-    timestamp2 = list(user2_data['timestamp'])
     
     for i in range(len(all_movies)):
         if all_movies[i] in movie1:
@@ -66,27 +76,14 @@ def basic_cosine_timestamp_weight(user1_data, user2_data, all_movies):
             movie = all_movies[i]
             rating = rating2[movie2.index(movie)]
             user2_list[i] = rating
-
+    
     cosine_sim = 1 - spatial.distance.cosine(user1_list, user2_list)
     # We take the mean of user ratings and subtract that mean from all individual ratings divided by the total number of ratings by user
-    
-    timestamp1.sort()
-    user1_oldest = timestamp1[0]
-    user1_newest = timestamp1[-1]
-    timestamp2.sort()
-    user2_oldest = timestamp2[0]
-    user2_newest = timestamp2[-1]
-
-    start_difference = abs(user1_oldest - user2_oldest)
-    end_difference = abs(user1_newest - user2_newest)
-    try:
-        cosine_timestamp_sim = cosine_sim / (start_difference + end_difference)
-    except ZeroDivisionError:
-        cosine_timestamp_sim = cosine_sim / 0.1 # this is extremely heavy weighting
+    # add centered cosine??? 
     return cosine_sim
 
 def build_cosine_matrix_from_file():
-    ratings = pd.read_csv('/home/loudenem/MIP_real/ratings_small.csv', nrows = 20000)
+    ratings = pd.read_csv('/home/loudenem/MIP_real/ratings_small.csv', nrows = 2000)
     all_users = list(dict.fromkeys(ratings['userId'].tolist()))
     all_movies = list(dict.fromkeys(ratings['movieId'].tolist()))
     num_users = len(all_users)
@@ -95,8 +92,8 @@ def build_cosine_matrix_from_file():
         for other_user in all_users:
             user_data = ratings.loc[ratings['userId'] == user]
             other_user_data = ratings.loc[ratings['userId'] == other_user]
-            cosine_timestamp_sim = basic_cosine_timestamp_weight(user_data, other_user_data, all_movies)
-            cosine_similarity_matrix[all_users.index(user)][all_users.index(other_user)] = cosine_timestamp_sim
+            cosine_sim = cosine_weight(user_data, other_user_data, all_movies)
+            cosine_similarity_matrix[all_users.index(user)][all_users.index(other_user)] = cosine_sim
     return cosine_similarity_matrix
 
 def build_cosine_matrix(ratings):
@@ -108,14 +105,14 @@ def build_cosine_matrix(ratings):
         for other_user in all_users:
             user_data = ratings.loc[ratings['userId'] == user]
             other_user_data = ratings.loc[ratings['userId'] == other_user]
-            cosine_sim = basic_cosine_timestamp_weight(user_data, other_user_data, all_movies)
+            cosine_sim = cosine_weight(user_data, other_user_data, all_movies)
             cosine_similarity_matrix[all_users.index(user)][all_users.index(other_user)] = cosine_sim
     return cosine_similarity_matrix, all_users
 
 def build_collab_predictions():
     reader = Reader()
-    ratings = pd.read_csv('/home/loudenem/MIP_real/ratings_small.csv', nrows = 30000)
-    user_num = 20
+    ratings = pd.read_csv('/home/loudenem/MIP_real/ratings_small.csv', nrows = 2000)
+    user_num = 10
     tested_user_info = list()
     all_user_list = ratings['userId'].tolist()
     random_user_list = random_users(user_num, all_user_list[-1])
@@ -151,7 +148,7 @@ def predict_rating(sim_matrix, trainset, user, movie, all_users):
             index_val = all_users.index(other_user)
             sim_score = float(sim_matrix[all_users.index(user)][index_val])
             sim_score_list.append([sim_score, rating])
-        top_ratings = order_list(sim_score_list, lambda x: x[0], 10)
+        top_ratings = order_list(sim_score_list, take_first, 10)
 
         if top_ratings == []:
             return 0
@@ -167,16 +164,8 @@ def test_collab_predictions():
     trainset, tested_user_info, random_user_list = build_collab_predictions()
     cosine_similarity_matrix, all_users = build_cosine_matrix(trainset)
     
-    totalRMSE = 0
-    totalMAE = 0
-    total_tested = 0 # to find average 
 
-    max_RMSE = 0 # range of values
-    min_RMSE = 0
-    max_MAE = 0
-    min_MAE = 0
-    
-    print("------ basic cosine timestamp collaborative recommender system -------\n")
+    print("------ testing collaborative recommender system -------\n")
     for name in random_user_list:
         user_ratings = list()
         user_movies = list()
@@ -186,43 +175,20 @@ def test_collab_predictions():
                     user_ratings.append(row[2])
                     user_movies.append(row[1])
         movie_predictions = list()
-        
         for i in range(len(user_ratings)):
             pred = predict_rating(cosine_similarity_matrix, trainset, name, user_movies[i], all_users)
             movie_predictions.append(pred)
         print(movie_predictions)
         print(user_ratings)
-        if len(movie_predictions) == 0:
-            print("user " + str(name) + " has no predicions")
-        else:
-            RMSE = sqrt(mean_squared_error(user_ratings, movie_predictions))
-            if RMSE > max_RMSE:
-                max_RMSE = RMSE
-            if RMSE > min_RMSE:
-                min_RMSE = RMSE
-                
-            totalRMSE += RMSE
-            MAE = mean_absolute_error(user_ratings, movie_predictions)
-            
-            if MAE > max_MAE:
-                max_MAE = MAE
-            if MAE > min_MAE:
-                min_MAE = MAE
-            totalMAE += MAE
-            total_tested += 1
-            print("for user " + str(name) + " the root mean square error was " + str(RMSE))
-            print("for user " + str(name) + " the mean absolute error was " + str(MAE))
-            print("\n")
-    print("average RMSE = " + str(totalRMSE/total_tested))
-    print("average MAE = " +str(totalMAE/total_tested))
         
+        RMSE = sqrt(mean_squared_error(user_ratings, movie_predictions))
+        MAE = mean_absolute_error(user_ratings, movie_predictions)
+        print("for user " + str(name) + " the root mean square error was " + str(RMSE))
+        print("for user " + str(name) + " the mean absolute error was " + str(MAE))
+        print("\n")
         
 
 def main():
-    
-    start = timeit.default_timer()
     test_collab_predictions()
-    stop = timeit.default_timer()
-    print('Time: ' + str(stop - start)) 
 
 main()
